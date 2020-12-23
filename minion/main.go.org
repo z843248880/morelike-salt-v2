@@ -1,0 +1,77 @@
+package main
+
+import (
+	"bufio"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"time"
+)
+
+const shellToUse = "/bin/bash"
+
+func main() {
+	localip := flag.String("localip", "", "local ip")
+	server := flag.String("server", "", "server address")
+	flag.Parse()
+	if len(*server) == 0 || len(*localip) == 0 {
+		fmt.Println("server address or localip is null")
+		os.Exit(1)
+	}
+	conn, err := net.Dial("tcp", *server)
+	if err != nil {
+		panic(err)
+	}
+	registerinfo := "mylocalip-bc3aa319-51b0-47a0-8b13-612d3bfe4d00-is:" + *localip + "\n"
+	conn.Write([]byte("myrole-bc3aa319-51b0-47a0-8b13-612d3bfe4d00-isminion\n"))
+	conn.Write([]byte(registerinfo))
+	fmt.Println("registerinfo: ", registerinfo)
+	input := bufio.NewScanner(conn)
+	for input.Scan() {
+		command := input.Text()
+		if len(command) == 0 {
+			continue
+		}
+		fmt.Println("command:", command)
+		cmd := exec.Command("bash", "-c", command)
+		cmdStdoutPipe, _ := cmd.StdoutPipe()
+		cmdStderrPipe, _ := cmd.StderrPipe()
+		err := cmd.Start()
+		if err != nil {
+			fmt.Println("cmd.Start: ", err.Error())
+			fmt.Fprintln(conn, fmt.Sprintf("cmd.Start: %s", err.Error()))
+		}
+		go getresult(cmdStdoutPipe, conn, "stdout: ")
+		go getresult(cmdStderrPipe, conn, "stderr: ")
+		time.Sleep(time.Second * 1)
+		err = cmd.Wait()
+		if err != nil {
+			fmt.Println("cmd.Wait: ", err.Error())
+			fmt.Fprintln(conn, fmt.Sprintf("%s", err.Error()))
+		}
+		fmt.Println("cmd.Wait() done.")
+		fmt.Fprintln(conn, "woyijing-bc3aa319-51b0-47a0-8b13-612d3bfe4d00-jieshule")
+	}
+}
+
+func getresult(reader io.ReadCloser, conn net.Conn, stdtype string) {
+	buf := make([]byte, 1024, 1024)
+	for {
+		strNum, err := reader.Read(buf)
+		if strNum > 0 {
+			outputByte := buf[:strNum]
+			//string(outputByte)这里面包含“\n”，所以用的fmt.Print而没用fmt.Println
+			fmt.Print(stdtype, string(outputByte))
+			fmt.Fprint(conn, string(outputByte))
+		}
+		if err != nil {
+			//读到结尾
+			if err == io.EOF {
+				err = nil
+			}
+		}
+	}
+}

@@ -1,0 +1,1 @@
+./client -c "ip a" -minionip "172.29.21.104" -masterip "172.29.21.194:4507"

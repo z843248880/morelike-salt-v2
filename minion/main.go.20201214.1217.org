@@ -1,0 +1,133 @@
+package main
+
+import (
+	"bufio"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	_ "net/http/pprof"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+var (
+	conn    net.Conn
+	r       *bufio.Reader
+	nettype string
+	server  string
+	localip string
+)
+
+const shellToUse = "/bin/bash"
+
+func forKeepAlive() {
+	fmt.Fprintln(conn, "woshi-bc3aa319-51b0-47a0-8b13-612d3bfe4d00-keepalive, minion: "+localip)
+}
+
+func initConn() (err error) {
+	registerinfo := "mylocalip-bc3aa319-51b0-47a0-8b13-612d3bfe4d00-is:" + localip + "\n"
+	fmt.Println("registerinfo: ", registerinfo)
+	conn, err = net.Dial(nettype, server)
+	if err != nil {
+		return
+	}
+	conn.Write([]byte("myrole-bc3aa319-51b0-47a0-8b13-612d3bfe4d00-isminion\n"))
+	conn.Write([]byte(registerinfo))
+	r = bufio.NewReader(conn)
+	return
+}
+
+func main() {
+	flocalip := flag.String("localip", "", "local ip")
+	fserver := flag.String("server", "", "server address")
+	flag.Parse()
+	if len(*fserver) == 0 || len(*flocalip) == 0 {
+		fmt.Println("server address or localip is null")
+		os.Exit(1)
+	}
+
+	nettype = "tcp"
+	server = *fserver
+	localip = *flocalip
+	err := initConn()
+	if err != nil {
+		fmt.Println("panic le .")
+		panic(err)
+	}
+	go func() {
+		for {
+			forKeepAlive()
+			time.Sleep(time.Minute)
+		}
+	}()
+	r = bufio.NewReader(conn)
+	for {
+		command, err := r.ReadString('\n')
+		if err == io.EOF {
+			fmt.Println("error is io.EOF")
+			err := initConn()
+			fmt.Println("reconnect error: ", err)
+			time.Sleep(time.Second * 5)
+			continue
+		}
+		if err != nil {
+			fmt.Println("read command error: ", err)
+			continue
+		}
+		command = strings.TrimSuffix(command, "\n")
+		if len(command) == 0 {
+			continue
+		}
+		fmt.Println("command:", command)
+
+		cmd := exec.Command("bash", "-c", command)
+		cmdStdoutPipe, _ := cmd.StdoutPipe()
+		cmdStderrPipe, _ := cmd.StderrPipe()
+		err = cmd.Start()
+		if err != nil {
+			fmt.Println("cmd.Start: ", err.Error())
+			fmt.Fprintln(conn, fmt.Sprintf("cmd.Start: %s", err.Error()))
+		}
+		go getresult(cmdStdoutPipe, conn, "stdout: ")
+		go getresult(cmdStderrPipe, conn, "stderr: ")
+		// time.Sleep(time.Second * 1)
+		err = cmd.Wait()
+		if err != nil {
+			fmt.Println("cmd.Wait: ", err.Error())
+			fmt.Fprintln(conn, fmt.Sprintf("%s", err.Error()))
+		}
+		fmt.Println("cmd.Wait() done.")
+		fmt.Fprintln(conn, "woyijing-bc3aa319-51b0-47a0-8b13-612d3bfe4d00-jieshule")
+	}
+}
+
+func getresult(reader io.ReadCloser, conn net.Conn, stdtype string) {
+	buf := make([]byte, 1024, 1024)
+	for {
+		strNum, err := reader.Read(buf)
+		fmt.Println("strNum: ", strNum)
+		if strNum > 0 {
+			outputByte := buf[:strNum]
+			//string(outputByte)这里面包含“\n”，所以用的fmt.Print而没用fmt.Println
+			fmt.Fprint(conn, string(outputByte))
+			fmt.Print(stdtype, string(outputByte))
+		}
+
+		if err != nil {
+			//读到结尾
+			// if err == io.EOF || strings.Contains(err.Error(), "file already closed") {
+			// 	err = nil
+			// 	fmt.Fprint(conn, "file already closed.")
+			// 	fmt.Println("getresult "+stdtype, "file already closed.")
+			// 	break
+			// } else {
+			// 	fmt.Fprint(conn, err.Error())
+			// 	fmt.Print("getresult "+stdtype, err.Error())
+			// }
+		}
+		// time.Sleep(time.Second * 5)
+	}
+}
